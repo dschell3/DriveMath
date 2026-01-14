@@ -88,7 +88,7 @@ This will open the app in your browser at `http://localhost:8501`.
 |------|--------|----------|
 | Vehicle MPG/kWh | [EPA FuelEconomy.gov](https://fueleconomy.gov/feg/download.shtml) | 2010-2026, ~48k vehicles |
 | Electricity Rates | [NREL/EIA via OpenEI](https://data.openei.org/submissions/8563) | ~30k zip codes |
-| Gas Prices | [EIA](https://www.eia.gov/petroleum/gasdiesel/) | 51 states (static, update manually) |
+| Gas Prices | [EIA](https://www.eia.gov/petroleum/gasdiesel/) | 50 states + DC (static, update manually) |
 
 ### Data Quality Notes
 
