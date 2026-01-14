@@ -48,18 +48,29 @@ def download_vehicle_data() -> pd.DataFrame | None:
             "comb08", "combE", "city08", "highway08"
         ]].copy()
         
+        # Debug: Show what fuel types exist in the data
+        print(f"  Fuel types found: {raw_data['fuelType'].unique()[:20]}")
+        
         # Determine fuel type category
         def categorize_fuel(row):
-            if row["fuelType"] == "Electricity" or row["fuelType1"] == "Electricity":
+            fuel = str(row["fuelType"]).strip() if pd.notna(row["fuelType"]) else ""
+            fuel1 = str(row["fuelType1"]).strip() if pd.notna(row["fuelType1"]) else ""
+            
+            # Electric vehicles
+            if fuel == "Electricity" or fuel1 == "Electricity":
                 return "electric"
-            elif row["fuelType"] in ["Regular Gasoline", "Premium Gasoline", "Midgrade Gasoline"]:
+            # Gas vehicles (EPA uses "Regular", "Premium", "Midgrade")
+            elif fuel in ["Regular", "Premium", "Midgrade", "Gasoline or E85", "Premium or E85"]:
                 return "gas"
-            elif row["fuelType"] == "Diesel":
+            elif fuel == "Diesel":
                 return "diesel"
             else:
                 return "other"
         
         vehicles["fuel_type"] = vehicles.apply(categorize_fuel, axis=1)
+        
+        # Debug: Show fuel type distribution after categorization
+        print(f"  Fuel type distribution: {vehicles['fuel_type'].value_counts().to_dict()}")
         
         # Calculate combined MPG for gas vehicles
         vehicles["combined_mpg"] = vehicles.apply(
@@ -67,19 +78,18 @@ def download_vehicle_data() -> pd.DataFrame | None:
             axis=1
         )
         
-        # Calculate kWh per 100 miles for EVs
-        # MPGe = (100 / kWh_per_100mi) * 33.7
-        # So: kWh_per_100mi = 3370 / MPGe
+        # For EVs, combE is ALREADY kWh/100mi (not MPGe) - use it directly
         vehicles["kwh_per_100mi"] = vehicles.apply(
-            lambda row: round(3370 / row["combE"], 1) 
+            lambda row: round(row["combE"], 1) 
             if row["fuel_type"] == "electric" and pd.notna(row["combE"]) and row["combE"] > 0 
             else None,
             axis=1
         )
         
         # Filter to recent years and relevant fuel types
+        # Include vehicles back to 2010 for older car comparisons
         vehicles = vehicles[
-            (vehicles["year"] >= 2015) &
+            (vehicles["year"] >= 2010) &
             (vehicles["fuel_type"].isin(["gas", "electric"]))
         ].copy()
         
@@ -114,66 +124,148 @@ def download_electricity_rates() -> pd.DataFrame | None:
     """
     print("Downloading electricity rates...")
     
-    # NREL provides IOU and Non-IOU rates separately
-    # Try 2024 data first, fall back to 2023
-    base_url = "https://data.openei.org/files/5828"
+    # NREL dataset - each year has a different submission ID
+    # Found at: https://data.openei.org/
+    submissions = {
+        2024: "8563",
+        2023: "6225",
+        2022: "5828",
+        2021: "5650",
+        2020: "5650",
+    }
     
-    try:
-        # Try to download IOU data
-        iou_url = f"{base_url}/iou_zipcodes_2024.csv"
-        non_iou_url = f"{base_url}/non_iou_zipcodes_2024.csv"
-        
-        print("  Downloading IOU rates...")
-        iou_response = requests.get(iou_url, timeout=30)
-        iou_response.raise_for_status()
-        iou_data = pd.read_csv(io.StringIO(iou_response.text))
-        print(f"  Downloaded {len(iou_data):,} IOU records")
-        
-        print("  Downloading Non-IOU rates...")
-        non_iou_response = requests.get(non_iou_url, timeout=30)
-        non_iou_response.raise_for_status()
-        non_iou_data = pd.read_csv(io.StringIO(non_iou_response.text))
-        print(f"  Downloaded {len(non_iou_data):,} Non-IOU records")
-        
-        # Combine datasets
-        rates = pd.concat([iou_data, non_iou_data], ignore_index=True)
-        
-        # Standardize column names (they may vary between files)
-        rates.columns = rates.columns.str.lower().str.strip()
-        
-        # Find the relevant columns (names vary by year)
-        zip_col = [c for c in rates.columns if 'zip' in c][0]
-        state_col = [c for c in rates.columns if 'state' in c][0]
-        utility_col = [c for c in rates.columns if 'utility' in c or 'name' in c][0]
-        rate_col = [c for c in rates.columns if 'res' in c or 'rate' in c][0]
-        
-        rates = rates.rename(columns={
-            zip_col: "zip",
-            state_col: "state", 
-            utility_col: "utility_name",
-            rate_col: "residential_rate"
-        })[[
-            "zip", "state", "utility_name", "residential_rate"
-        ]].copy()
-        
-        # Clean up
-        rates["zip"] = rates["zip"].astype(str).str.zfill(5)
-        rates["residential_rate"] = pd.to_numeric(rates["residential_rate"], errors="coerce")
-        rates = rates.dropna(subset=["residential_rate"])
-        
-        print(f"  Processed to {len(rates):,} zip code records")
-        
-        # Save
-        rates.to_csv("data/electricity_rates.csv", index=False)
-        print("  Saved to data/electricity_rates.csv")
-        
-        return rates
-        
-    except Exception as e:
-        print(f"  Failed to download electricity rates: {e}")
-        print("  Try downloading manually from:")
-        print("  https://catalog.data.gov/dataset/u-s-electric-utility-companies-and-rates-look-up-by-zip-code-2024")
-        return None
+    for year, submission_id in submissions.items():
+        try:
+            print(f"  Trying {year} data (submission {submission_id})...")
+            base_url = f"https://data.openei.org/files/{submission_id}"
+            
+            # File naming varies by year
+            iou_patterns = [
+                f"iou_zipcodes_{year}.csv",
+                f"IOU_zipcodes_{year}.csv",
+                f"iou_zip_{year}.csv",
+                f"IOU rates with zip codes {year}.csv",
+                f"IOU rates with zip codes, {year}.csv",
+                "iou_zipcodes.csv",
+                "IOU rates with zip codes.csv",
+            ]
+            
+            non_iou_patterns = [
+                f"non_iou_zipcodes_{year}.csv",
+                f"Non_IOU_zipcodes_{year}.csv",
+                f"non_iou_zip_{year}.csv",
+                f"Non-IOU rates with zip codes {year}.csv",
+                f"Non-IOU rates with zip codes, {year}.csv",
+                "non_iou_zipcodes.csv",
+                "Non-IOU rates with zip codes.csv",
+            ]
+            
+            iou_data = None
+            non_iou_data = None
+            
+            # Try to download IOU data
+            for pattern in iou_patterns:
+                url = f"{base_url}/{pattern}"
+                try:
+                    response = requests.get(url, timeout=30)
+                    if response.status_code == 200:
+                        iou_data = pd.read_csv(io.StringIO(response.text))
+                        print(f"    Downloaded IOU rates: {len(iou_data):,} records")
+                        break
+                except:
+                    continue
+            
+            if iou_data is None:
+                print(f"    Could not find IOU data for {year}")
+                continue
+            
+            # Try to download Non-IOU data
+            for pattern in non_iou_patterns:
+                url = f"{base_url}/{pattern}"
+                try:
+                    response = requests.get(url, timeout=30)
+                    if response.status_code == 200:
+                        non_iou_data = pd.read_csv(io.StringIO(response.text))
+                        print(f"    Downloaded Non-IOU rates: {len(non_iou_data):,} records")
+                        break
+                except:
+                    continue
+            
+            # Combine datasets (Non-IOU is optional)
+            if non_iou_data is not None:
+                rates = pd.concat([iou_data, non_iou_data], ignore_index=True)
+            else:
+                rates = iou_data
+                print("    Note: Only IOU data available")
+            
+            # Standardize column names (they vary between files/years)
+            rates.columns = rates.columns.str.lower().str.strip()
+            
+            # Find the relevant columns
+            zip_col = next((c for c in rates.columns if 'zip' in c), None)
+            state_col = next((c for c in rates.columns if 'state' in c), None)
+            utility_col = next((c for c in rates.columns if 'utility_name' in c or 'utility name' in c), None)
+            rate_col = next((c for c in rates.columns if 'res_rate' in c or 'res rate' in c or 'residential' in c), None)
+            
+            if not all([zip_col, state_col, rate_col]):
+                print(f"    Could not find required columns in {year} data")
+                print(f"    Available columns: {list(rates.columns)}")
+                continue
+            
+            # Use utility name if available, otherwise use eiaid
+            if utility_col is None:
+                utility_col = next((c for c in rates.columns if 'eiaid' in c), None)
+            if utility_col is None:
+                utility_col = next((c for c in rates.columns if 'name' in c), None)
+            
+            rename_map = {
+                zip_col: "zip",
+                state_col: "state",
+                rate_col: "residential_rate"
+            }
+            if utility_col:
+                rename_map[utility_col] = "utility_name"
+            
+            rates = rates.rename(columns=rename_map)
+            
+            # Select only needed columns
+            cols_to_keep = ["zip", "state", "utility_name", "residential_rate"]
+            rates = rates[[c for c in cols_to_keep if c in rates.columns]].copy()
+            
+            # Add placeholder utility name if missing
+            if "utility_name" not in rates.columns:
+                rates["utility_name"] = "Unknown"
+            
+            # Clean up
+            rates["zip"] = rates["zip"].astype(str).str.zfill(5)
+            rates["residential_rate"] = pd.to_numeric(rates["residential_rate"], errors="coerce")
+            rates = rates.dropna(subset=["residential_rate"])
+            
+            # Filter out bad data: rates below $0.01/kWh are almost certainly errors
+            bad_rates = len(rates[rates["residential_rate"] < 0.01])
+            if bad_rates > 0:
+                print(f"    Filtering out {bad_rates} records with rates < $0.01/kWh (bad data)")
+                rates = rates[rates["residential_rate"] >= 0.01]
+            
+            # Remove duplicates
+            rates = rates.drop_duplicates(subset=["zip", "utility_name"])
+            
+            print(f"  Processed to {len(rates):,} zip code records")
+            
+            # Save
+            rates.to_csv("data/electricity_rates.csv", index=False)
+            print(f"  Saved to data/electricity_rates.csv (using {year} data)")
+            
+            return rates
+            
+        except Exception as e:
+            print(f"    {year} failed: {e}")
+            continue
+    
+    print("  All download attempts failed.")
+    print("  Please download manually from:")
+    print("  https://catalog.data.gov/dataset/u-s-electric-utility-companies-and-rates-look-up-by-zip-code-2024")
+    return None
 
 
 def download_gas_prices() -> pd.DataFrame:

@@ -25,22 +25,74 @@ def load_vehicle_data(path: str = "data/vehicles.csv") -> pd.DataFrame:
 def create_sample_vehicle_data() -> pd.DataFrame:
     """Create sample vehicle data for development/testing."""
     
-    # Sample gas vehicles
+    # Sample gas vehicles - expanded to include older years
     gas_vehicles = pd.DataFrame({
-        "year": [2024, 2024, 2024, 2024, 2024, 2024,
-                 2023, 2023, 2023, 2023, 2023, 2023,
-                 2022, 2022, 2022, 2022],
-        "make": ["Toyota", "Toyota", "Honda", "Ford", "Honda", "Chevrolet",
-                 "Toyota", "Toyota", "Honda", "Ford", "Honda", "Chevrolet",
-                 "Toyota", "Honda", "Ford", "Chevrolet"],
-        "model": ["Camry", "Corolla", "Civic", "F-150", "Accord", "Silverado",
-                  "Camry", "Corolla", "Civic", "F-150", "Accord", "Silverado",
-                  "Camry", "Civic", "F-150", "Silverado"],
-        "fuel_type": ["gas"] * 16,
-        "combined_mpg": [32, 35, 36, 22, 32, 21,
-                        31, 34, 35, 21, 31, 20,
-                        30, 34, 20, 19],
-        "kwh_per_100mi": [None] * 16
+        "year": [
+            # 2024
+            2024, 2024, 2024, 2024, 2024, 2024,
+            # 2023
+            2023, 2023, 2023, 2023, 2023, 2023,
+            # 2022
+            2022, 2022, 2022, 2022,
+            # 2020
+            2020, 2020, 2020, 2020,
+            # 2018
+            2018, 2018, 2018, 2018,
+            # 2015
+            2015, 2015, 2015, 2015,
+            # 2013
+            2013, 2013, 2013, 2013,
+        ],
+        "make": [
+            # 2024
+            "Toyota", "Toyota", "Honda", "Ford", "Honda", "Chevrolet",
+            # 2023
+            "Toyota", "Toyota", "Honda", "Ford", "Honda", "Chevrolet",
+            # 2022
+            "Toyota", "Honda", "Ford", "Chevrolet",
+            # 2020
+            "Toyota", "Honda", "Ford", "Chevrolet",
+            # 2018
+            "Toyota", "Honda", "Ford", "Chevrolet",
+            # 2015
+            "Toyota", "Honda", "Ford", "Chevrolet",
+            # 2013
+            "Toyota", "Honda", "Ford", "Chevrolet",
+        ],
+        "model": [
+            # 2024
+            "Camry", "Corolla", "Civic", "F-150", "Accord", "Silverado",
+            # 2023
+            "Camry", "Corolla", "Civic", "F-150", "Accord", "Silverado",
+            # 2022
+            "Camry", "Civic", "F-150", "Silverado",
+            # 2020
+            "Camry", "Civic", "F-150", "Silverado",
+            # 2018
+            "Camry", "Civic", "F-150", "Silverado",
+            # 2015
+            "Camry", "Civic", "F-150", "Silverado",
+            # 2013
+            "Camry", "Civic", "F-150", "Silverado",
+        ],
+        "fuel_type": ["gas"] * 32,
+        "combined_mpg": [
+            # 2024
+            32, 35, 36, 22, 32, 21,
+            # 2023
+            31, 34, 35, 21, 31, 20,
+            # 2022
+            30, 34, 20, 19,
+            # 2020
+            29, 33, 20, 18,
+            # 2018
+            29, 32, 19, 18,
+            # 2015
+            28, 31, 18, 17,
+            # 2013
+            28, 30, 17, 16,
+        ],
+        "kwh_per_100mi": [None] * 32
     })
     
     # Sample EVs
