@@ -14,8 +14,14 @@ from data_loader import (
     get_utilities_for_zip,
     get_gas_price,
     get_tou_multiplier,
+    validate_zip,
 )
-from calculations import calculate_comparison
+from calculations import (
+    calculate_comparison,
+    calculate_cumulative_costs,
+    calculate_breakeven_years,
+    calculate_emissions_comparison,
+)
 
 # =============================================================================
 # Page Config
@@ -58,20 +64,21 @@ st.divider()
 
 st.header("📍 Your Location")
 
-# Handle multi-utility zip codes (need to check before rendering columns)
-utilities = get_utilities_for_zip(zip_code if 'zip_code' in dir() else "95822", electricity_df)
-
 col1, col2 = st.columns(2)
 
 with col1:
-    zip_code = st.text_input(
+    zip_input = st.text_input(
         "Zip Code",
         value="95822",
         max_chars=5,
         placeholder="e.g., 90210"
     )
 
-# Re-check utilities with actual zip_code value
+zip_code = validate_zip(zip_input)
+if zip_code is None:
+    st.error("Please enter a valid 5-digit zip code.")
+    zip_code = ""
+
 utilities = get_utilities_for_zip(zip_code, electricity_df)
 
 with col2:
@@ -112,6 +119,43 @@ if electricity_rate < 0.06:
         "This may be a data error. Typical US residential rates range from $0.08-$0.40/kWh. "
         "Consider verifying with your utility bill."
     )
+
+# Gas price for this location (state average, with national fallback)
+gas_price, gas_price_state = get_gas_price(zip_code, gas_prices_df, electricity_df)
+if gas_price_state:
+    st.caption(f"⛽ Gas price for your area: **${gas_price:.2f}/gal** ({gas_price_state} state average)")
+else:
+    st.caption(f"⛽ Gas price: **${gas_price:.2f}/gal** (national average — couldn't determine your state)")
+
+# Let users override the looked-up prices with what they actually pay —
+# a utility bill or local pump price beats any dataset average
+with st.expander("⚙️ Know your actual prices? Override them here"):
+    override_col1, override_col2 = st.columns(2)
+    with override_col1:
+        use_custom_elec = st.checkbox("Custom electricity rate", key="use_custom_elec")
+        if use_custom_elec:
+            electricity_rate = st.number_input(
+                "Your rate ($/kWh)",
+                min_value=0.01,
+                max_value=1.00,
+                value=float(electricity_rate),
+                step=0.01,
+                format="%.3f",
+                help="Find this on your utility bill (total cost ÷ kWh used is most accurate)"
+            )
+            utility_name = "Custom rate"
+    with override_col2:
+        use_custom_gas = st.checkbox("Custom gas price", key="use_custom_gas")
+        if use_custom_gas:
+            gas_price = st.number_input(
+                "Your gas price ($/gal)",
+                min_value=0.50,
+                max_value=10.00,
+                value=float(gas_price),
+                step=0.05,
+                format="%.2f",
+                help="What you typically pay at the pump"
+            )
 
 st.divider()
 
@@ -169,12 +213,13 @@ with col_gas:
     )
     
     if gas_year and gas_make and gas_model:
-        gas_mpg = gas_vehicles[
+        # Average across trims if the data file has multiple entries
+        gas_mpg = round(gas_vehicles[
             (gas_vehicles["year"] == gas_year) &
             (gas_vehicles["make"] == gas_make) &
             (gas_vehicles["model"] == gas_model)
-        ]["combined_mpg"].iloc[0]
-        st.metric("Combined MPG", f"{gas_mpg}")
+        ]["combined_mpg"].mean(), 1)
+        st.metric("Combined MPG", f"{gas_mpg:g}")
     else:
         gas_mpg = None
 
@@ -224,12 +269,13 @@ with col_ev:
     )
     
     if ev_year and ev_make and ev_model:
-        ev_kwh = ev_vehicles[
+        # Average across trims if the data file has multiple entries
+        ev_kwh = round(ev_vehicles[
             (ev_vehicles["year"] == ev_year) &
             (ev_vehicles["make"] == ev_make) &
             (ev_vehicles["model"] == ev_model)
-        ]["kwh_per_100mi"].iloc[0]
-        st.metric("Efficiency", f"{ev_kwh} kWh/100mi")
+        ]["kwh_per_100mi"].mean(), 1)
+        st.metric("Efficiency", f"{ev_kwh:g} kWh/100mi")
     else:
         ev_kwh = None
 
@@ -275,16 +321,13 @@ st.divider()
 inputs_valid = all([
     gas_year, gas_make, gas_model,
     ev_year, ev_make, ev_model,
-    gas_mpg is not None,
-    ev_kwh is not None
+    gas_mpg is not None and pd.notna(gas_mpg) and gas_mpg > 0,
+    ev_kwh is not None and pd.notna(ev_kwh) and ev_kwh > 0,
 ])
 
 if not inputs_valid:
     st.info("👆 **Complete the selections above** to see your cost comparison.")
 else:
-    # Get gas price for location
-    gas_price = get_gas_price(zip_code, gas_prices_df)
-    
     # Get TOU multiplier
     tou_multiplier = get_tou_multiplier(charging_scenario)
     
@@ -370,7 +413,9 @@ else:
     # --- Visualizations ---
     st.header("📈 Visualizations")
     
-    tab1, tab2, tab3 = st.tabs(["Annual Cost", "Savings Over Time", "What If..."])
+    tab1, tab2, tab3, tab4 = st.tabs(
+        ["Annual Cost", "Savings Over Time", "What If...", "Environmental Impact"]
+    )
     
     with tab1:
         # Annual cost bar chart
@@ -396,22 +441,69 @@ else:
             showlegend=False,
             height=400
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     
     with tab2:
         # Cumulative savings over time
         years_to_project = st.slider("Years to project", 1, 15, 5, key="projection_slider")
-        
+
+        with st.expander("📈 Projection options (price inflation, purchase prices)"):
+            esc_col1, esc_col2 = st.columns(2)
+            with esc_col1:
+                gas_escalation = st.slider(
+                    "Annual gas price increase",
+                    min_value=0, max_value=10, value=0, step=1,
+                    format="%d%%", key="gas_escalation",
+                    help="US gas prices have historically risen ~2-4% per year"
+                )
+            with esc_col2:
+                elec_escalation = st.slider(
+                    "Annual electricity price increase",
+                    min_value=0, max_value=10, value=0, step=1,
+                    format="%d%%", key="elec_escalation",
+                    help="US residential electricity rates have historically risen ~2-3% per year"
+                )
+
+            include_purchase = st.checkbox(
+                "Include purchase prices (breakeven analysis)",
+                key="include_purchase"
+            )
+            gas_purchase_price = 0.0
+            ev_purchase_price = 0.0
+            if include_purchase:
+                price_col1, price_col2 = st.columns(2)
+                with price_col1:
+                    gas_purchase_price = st.number_input(
+                        "Gas vehicle price ($)",
+                        min_value=0, max_value=200000, value=0, step=1000,
+                        key="gas_purchase_price",
+                        help="Use $0 if you already own it and are only weighing the switch"
+                    )
+                with price_col2:
+                    ev_purchase_price = st.number_input(
+                        "EV price ($)",
+                        min_value=0, max_value=200000, value=45000, step=1000,
+                        key="ev_purchase_price",
+                        help="After any tax credits or incentives"
+                    )
+
+        gas_fuel_cumulative = calculate_cumulative_costs(
+            results["gas_annual_cost"], years_to_project, gas_escalation / 100
+        )
+        ev_fuel_cumulative = calculate_cumulative_costs(
+            results["ev_annual_cost"], years_to_project, elec_escalation / 100
+        )
+
         years = list(range(years_to_project + 1))
-        gas_cumulative = [results["gas_annual_cost"] * y for y in years]
-        ev_cumulative = [results["ev_annual_cost"] * y for y in years]
-        
+        gas_cumulative = [gas_purchase_price] + [gas_purchase_price + c for c in gas_fuel_cumulative]
+        ev_cumulative = [ev_purchase_price] + [ev_purchase_price + c for c in ev_fuel_cumulative]
+
         cumulative_df = pd.DataFrame({
             "Year": years + years,
             "Cumulative Cost": gas_cumulative + ev_cumulative,
             "Vehicle": [results["gas_vehicle_name"]] * len(years) + [results["ev_vehicle_name"]] * len(years)
         })
-        
+
         fig = px.line(
             cumulative_df,
             x="Year",
@@ -423,20 +515,43 @@ else:
             },
             markers=True
         )
+        chart_title = f"Cumulative {'Total' if include_purchase else 'Fuel'} Costs Over {years_to_project} Years"
         fig.update_layout(
-            title=f"Cumulative Fuel Costs Over {years_to_project} Years",
+            title=chart_title,
             xaxis_title="Year",
             yaxis_title="Cumulative Cost ($)",
             height=400,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
-        st.plotly_chart(fig, use_container_width=True)
-        
-        total_savings = results["annual_savings"] * years_to_project
+        st.plotly_chart(fig, width="stretch")
+
+        total_savings = gas_cumulative[-1] - ev_cumulative[-1]
         if total_savings > 0:
             st.success(f"**Total savings over {years_to_project} years:** ${total_savings:,.0f}")
         else:
             st.warning(f"**Additional cost over {years_to_project} years:** ${abs(total_savings):,.0f}")
+
+        if include_purchase:
+            ev_premium = ev_purchase_price - gas_purchase_price
+            if ev_premium <= 0:
+                st.info("The EV costs no more upfront, so any fuel savings are immediate.")
+            else:
+                breakeven = calculate_breakeven_years(ev_premium, results["annual_savings"])
+                if breakeven == float("inf"):
+                    st.info(
+                        "At current prices the EV doesn't save on fuel, "
+                        "so the purchase premium never breaks even."
+                    )
+                elif breakeven > years_to_project:
+                    st.info(
+                        f"**Breakeven: ~{breakeven:.1f} years** — the ${ev_premium:,.0f} EV premium "
+                        f"pays back beyond your {years_to_project}-year projection window."
+                    )
+                else:
+                    st.success(
+                        f"**Breakeven: ~{breakeven:.1f} years** — after that, "
+                        f"the ${ev_premium:,.0f} EV premium is paid back by fuel savings."
+                    )
     
     with tab3:
         # Sensitivity analysis
@@ -490,6 +605,65 @@ else:
             st.success(f"**Adjusted annual savings:** ${adjusted_savings:,.0f}")
         else:
             st.warning(f"**Adjusted annual extra cost:** ${abs(adjusted_savings):,.0f}")
+
+    with tab4:
+        emissions = calculate_emissions_comparison(
+            gas_mpg=gas_mpg,
+            ev_kwh_per_100=ev_kwh,
+            annual_miles=annual_miles,
+        )
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric(
+                "⛽ Gas Vehicle CO₂",
+                f"{emissions['gas_annual_co2_kg']:,.0f} kg/yr"
+            )
+        with col2:
+            st.metric(
+                "🔋 EV CO₂ (grid)",
+                f"{emissions['ev_annual_co2_kg']:,.0f} kg/yr"
+            )
+        with col3:
+            st.metric(
+                "CO₂ Reduction",
+                f"{emissions['co2_reduction_pct']:.0f}%",
+                delta=f"-{emissions['annual_co2_savings_kg']:,.0f} kg/yr",
+                delta_color="inverse"
+            )
+
+        emissions_df = pd.DataFrame({
+            "Vehicle": [results["gas_vehicle_name"], results["ev_vehicle_name"]],
+            "Annual CO₂ (kg)": [
+                emissions["gas_annual_co2_kg"],
+                emissions["ev_annual_co2_kg"]
+            ],
+            "Type": ["Gas", "Electric"]
+        })
+        fig = px.bar(
+            emissions_df,
+            x="Vehicle",
+            y="Annual CO₂ (kg)",
+            color="Type",
+            color_discrete_map={"Gas": "#ef4444", "Electric": "#22c55e"},
+            text="Annual CO₂ (kg)"
+        )
+        fig.update_traces(texttemplate="%{text:,.0f} kg", textposition="outside")
+        fig.update_layout(
+            title="Estimated Annual CO₂ Emissions",
+            xaxis_title="",
+            yaxis_title="CO₂ (kg/year)",
+            showlegend=False,
+            height=400
+        )
+        st.plotly_chart(fig, width="stretch")
+
+        st.caption(
+            "Estimates cover gasoline combustion vs. US-average grid electricity "
+            "(~0.39 kg CO₂/kWh), not upstream fuel production or vehicle manufacturing. "
+            "Your grid may be cleaner or dirtier than average — regions with more "
+            "hydro, nuclear, wind, or solar power make EVs even cleaner."
+        )
 
 # =============================================================================
 # Footer

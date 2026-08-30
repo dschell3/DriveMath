@@ -93,12 +93,17 @@ def download_vehicle_data() -> pd.DataFrame | None:
             (vehicles["fuel_type"].isin(["gas", "electric"]))
         ].copy()
         
-        # Select final columns and remove duplicates
+        # EPA lists multiple entries per model (engine/trim variants).
+        # Average efficiency across variants so the app shows a
+        # representative number rather than an arbitrary trim.
         vehicles = vehicles[[
             "year", "make", "model", "fuel_type", "combined_mpg", "kwh_per_100mi"
-        ]].drop_duplicates(
-            subset=["year", "make", "model", "fuel_type"]
-        ).sort_values(
+        ]].groupby(
+            ["year", "make", "model", "fuel_type"], as_index=False
+        ).mean(numeric_only=True)
+        vehicles["combined_mpg"] = vehicles["combined_mpg"].round(1)
+        vehicles["kwh_per_100mi"] = vehicles["kwh_per_100mi"].round(1)
+        vehicles = vehicles.sort_values(
             ["year", "make", "model"], ascending=[False, True, True]
         )
         
@@ -172,7 +177,7 @@ def download_electricity_rates() -> pd.DataFrame | None:
                         iou_data = pd.read_csv(io.StringIO(response.text))
                         print(f"    Downloaded IOU rates: {len(iou_data):,} records")
                         break
-                except:
+                except (requests.RequestException, pd.errors.ParserError):
                     continue
             
             if iou_data is None:
@@ -188,7 +193,7 @@ def download_electricity_rates() -> pd.DataFrame | None:
                         non_iou_data = pd.read_csv(io.StringIO(response.text))
                         print(f"    Downloaded Non-IOU rates: {len(non_iou_data):,} records")
                         break
-                except:
+                except (requests.RequestException, pd.errors.ParserError):
                     continue
             
             # Combine datasets (Non-IOU is optional)
@@ -241,11 +246,12 @@ def download_electricity_rates() -> pd.DataFrame | None:
             rates["residential_rate"] = pd.to_numeric(rates["residential_rate"], errors="coerce")
             rates = rates.dropna(subset=["residential_rate"])
             
-            # Filter out bad data: rates below $0.01/kWh are almost certainly errors
-            bad_rates = len(rates[rates["residential_rate"] < 0.01])
+            # Filter out bad data: rates below $0.01 or above $1.00/kWh
+            # are almost certainly errors (typical US range is $0.08-$0.40)
+            bad_rates = len(rates[(rates["residential_rate"] < 0.01) | (rates["residential_rate"] > 1.00)])
             if bad_rates > 0:
-                print(f"    Filtering out {bad_rates} records with rates < $0.01/kWh (bad data)")
-                rates = rates[rates["residential_rate"] >= 0.01]
+                print(f"    Filtering out {bad_rates} records with rates outside $0.01-$1.00/kWh (bad data)")
+                rates = rates[(rates["residential_rate"] >= 0.01) & (rates["residential_rate"] <= 1.00)]
             
             # Remove duplicates
             rates = rates.drop_duplicates(subset=["zip", "utility_name"])

@@ -1,7 +1,7 @@
 # DriveMath - Python Dependencies
 
-# Web framework
-streamlit>=1.28.0
+# Web framework (1.46+ needed for width="stretch" chart API)
+streamlit>=1.46.0
 
 # Data manipulation
 pandas>=2.0.0
@@ -11,6 +11,9 @@ plotly>=5.18.0
 
 # HTTP requests (for data download)
 requests>=2.31.0
+
+# Testing
+pytest>=7.4.0
 
 # Optional: For future GIS features (Phase 2)
 # geopandas>=0.14.0
