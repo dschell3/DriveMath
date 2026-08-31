@@ -5,6 +5,8 @@ An interactive Python/Streamlit application that compares the annual fuel costs 
 ## Features
 
 - **Location-based pricing**: Uses your zip code to look up local electricity rates and state gas prices (all 50 states + DC)
+- **Live gas prices** (optional): With a free [EIA API key](https://www.eia.gov/opendata/register.php), the app fetches current weekly retail gasoline prices instead of static averages
+- **Data transparency**: A sidebar shows exactly where each dataset comes from and how fresh it is
 - **Multi-utility support**: Handles zip codes served by multiple utilities (e.g., Sacramento area with both SMUD and PG&E) by letting users select their provider
 - **Custom price overrides**: Enter your actual electricity rate and pump price when you know them — real numbers beat dataset averages
 - **Vehicle database**: Includes EPA fuel economy data for thousands of gas and electric vehicles (2010-present), averaged across trims
@@ -19,7 +21,42 @@ An interactive Python/Streamlit application that compares the annual fuel costs 
   - Sensitivity analysis ("What If" gas/electricity prices change)
   - CO₂ emissions comparison chart
 
-## Changelog: Improvement Pass (2026-08)
+## Changelog: Improvement Pass 2 (2026-08) — Real-time data & UI/UX
+
+For transparency, the second automated improvement pass implemented:
+
+**Real-time data**
+- **Live EIA gas prices** (previously a v2 idea): new `live_prices.py`
+  module fetches current weekly retail regular-gasoline prices from the
+  EIA API. EIA publishes direct weekly series for 9 states (CA, CO, FL,
+  MA, MN, NY, OH, TX, WA); every other state uses its PADD region's
+  weekly average — still refreshed weekly, and labeled as a regional
+  average in the UI. Cached for 6 hours; any failure falls back to the
+  static file automatically. See **Live Gas Prices** below for setup.
+- `download_data.py` also uses the EIA key when present, so the saved
+  `gas_prices.csv` contains real current prices instead of hardcoded ones.
+- **Data provenance sidebar**: shows the source and freshness of every
+  dataset (live EIA week, file download dates, or "built-in sample data")
+  so users know exactly what their numbers are based on.
+- The gas price caption states whether the price is a live state series,
+  a live regional average (and which week), or a static average.
+
+**UI/UX**
+- Streamlit theme (`.streamlit/config.toml`) matching the app's green
+  EV accent, with usage-stats reporting disabled.
+- Vehicle pickers are now bordered cards; the EV card shows MPGe
+  alongside kWh/100mi so gas-minded shoppers can compare intuitively.
+- Sidebar with an about blurb, data status, and EIA key instructions.
+- Footer states which gas price data the results were computed from.
+
+**Testing**
+- 13 new tests for the live price module (mocked network): coverage of
+  all 51 states, state-over-region precedence, latest-week selection,
+  bad-row handling, and every failure mode falling back to None.
+- All three app data paths (static, live, live-fetch-failed) smoke
+  tested headlessly.
+
+## Changelog: Improvement Pass 1 (2026-08)
 
 For transparency, this automated improvement pass implemented the following.
 Everything below was added or changed in this pass; features not listed
@@ -84,11 +121,15 @@ drivemath/
 ├── app.py                 # Main Streamlit application
 ├── data_loader.py         # Functions to load and look up data
 ├── calculations.py        # Core cost calculation logic
+├── live_prices.py         # Live EIA gas price fetching (optional API key)
 ├── download_data.py       # Script to download real datasets
+├── .streamlit/
+│   └── config.toml        # App theme
 ├── requirements.txt       # Python dependencies
 ├── tests/                 # Pytest suite for calculations and data lookups
 │   ├── test_calculations.py
-│   └── test_data_loader.py
+│   ├── test_data_loader.py
+│   └── test_live_prices.py
 ├── data/                  # Data files (created by download script)
 │   ├── vehicles.csv       # EPA vehicle database
 │   ├── electricity_rates.csv  # NREL electricity rates by zip
@@ -140,13 +181,34 @@ This will open the app in your browser at `http://localhost:8501`.
 
 > **Note**: The app includes built-in sample data for development, but for full vehicle/zip coverage you should run the download script first.
 
+### 5. (Optional) Live Gas Prices
+
+Register for a free EIA API key at [eia.gov/opendata](https://www.eia.gov/opendata/register.php), then either:
+
+```bash
+# Option A: environment variable
+export EIA_API_KEY=your_key_here
+streamlit run app.py
+```
+
+```toml
+# Option B: .streamlit/secrets.toml (never commit this file)
+EIA_API_KEY = "your_key_here"
+```
+
+With a key set, the app fetches current weekly retail gasoline prices
+(refreshed every 6 hours) instead of static averages. Nine states have
+their own weekly EIA series; the rest use their PADD region's weekly
+average, and the UI labels which one you're seeing. If the fetch fails
+for any reason the app quietly falls back to the static data.
+
 ## Data Sources
 
 | Data | Source | Coverage |
 |------|--------|----------|
 | Vehicle MPG/kWh | [EPA FuelEconomy.gov](https://fueleconomy.gov/feg/download.shtml) | 2010-2026, ~48k vehicles |
 | Electricity Rates | [NREL/EIA via OpenEI](https://data.openei.org/submissions/8563) | ~30k zip codes |
-| Gas Prices | [EIA](https://www.eia.gov/petroleum/gasdiesel/) | 50 states + DC (static, update manually) |
+| Gas Prices | [EIA](https://www.eia.gov/petroleum/gasdiesel/) | 50 states + DC (live weekly with an EIA API key; static fallback) |
 
 ### Data Quality Notes
 
@@ -246,7 +308,8 @@ The script automatically tries multiple years of NREL data (2024, 2023, 2022...)
 
 ## Known Limitations
 
-- Gas prices are static state averages (not real-time) — mitigated by the custom price override
+- Without an EIA API key, gas prices are static state averages — mitigated by the live EIA integration and the custom price override
+- Live EIA prices are state-level for 9 states, PADD-region averages for the rest (labeled in the UI)
 - Electricity rates are utility averages (not detailed TOU structures) — mitigated by the custom rate override
 - Some zip codes may have multiple utilities; user must select manually
 - Vehicle efficiency is averaged across trims of the same year/make/model (individual trims are not selectable)
@@ -258,8 +321,8 @@ The script automatically tries multiple years of NREL data (2024, 2023, 2022...)
 - [x] Purchase price / breakeven analysis
 - [x] Environmental impact (CO2 savings)
 - [x] Custom electricity/gas price overrides
+- [x] Real-time gas prices via EIA API
 - [ ] Address-based utility auto-detection (geocode → service territory shapefiles via GeoPandas)
-- [ ] Real-time gas prices via EIA API
 - [ ] Detailed TOU rate structures for major utilities
 - [ ] Regional grid carbon intensity (EPA eGRID subregions) for CO₂ estimates
 - [ ] Maintenance cost comparison

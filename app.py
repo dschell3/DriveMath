@@ -14,13 +14,16 @@ from data_loader import (
     get_utilities_for_zip,
     get_gas_price,
     get_tou_multiplier,
+    get_data_freshness,
     validate_zip,
 )
+from live_prices import fetch_live_gas_prices, get_eia_api_key
 from calculations import (
     calculate_comparison,
     calculate_cumulative_costs,
     calculate_breakeven_years,
     calculate_emissions_comparison,
+    kwh_to_mpge,
 )
 
 # =============================================================================
@@ -45,6 +48,67 @@ def load_all_data():
     return vehicles, electricity, gas
 
 vehicles_df, electricity_df, gas_prices_df = load_all_data()
+
+
+# --- Live gas prices (EIA API, refreshed every 6 hours) ---
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def load_live_gas_prices(api_key: str):
+    return fetch_live_gas_prices(api_key)
+
+
+def resolve_eia_api_key() -> str | None:
+    """EIA key from Streamlit secrets or the environment."""
+    try:
+        key = str(st.secrets.get("EIA_API_KEY", "")).strip()
+        if key:
+            return key
+    except Exception:
+        pass
+    return get_eia_api_key()
+
+
+eia_api_key = resolve_eia_api_key()
+live_gas_df = None
+if eia_api_key:
+    with st.spinner("Fetching live gas prices from EIA..."):
+        live_gas_df = load_live_gas_prices(eia_api_key)
+
+if live_gas_df is not None:
+    gas_prices_df = live_gas_df
+    gas_data_week = live_gas_df["period"].max()
+    gas_data_note = f"Live EIA weekly prices (week of {gas_data_week})"
+elif eia_api_key:
+    gas_data_note = "Static state averages (live EIA fetch failed — check your key or connection)"
+else:
+    gas_data_note = "Static state averages (add an EIA API key for live weekly prices)"
+
+
+# --- Sidebar: about + data provenance ---
+
+with st.sidebar:
+    st.header("ℹ️ About DriveMath")
+    st.markdown(
+        "Estimates what you'd spend fueling an EV vs. your current gas "
+        "vehicle, using your local electricity rate and gas price."
+    )
+    st.subheader("📅 Data status")
+    st.markdown(f"**Gas prices:** {gas_data_note}")
+    for dataset, status in get_data_freshness().items():
+        if dataset == "Gas prices" and live_gas_df is not None:
+            continue
+        st.markdown(f"**{dataset}:** {status}")
+    if live_gas_df is None:
+        st.caption(
+            "For live weekly gas prices, get a free API key at "
+            "[eia.gov/opendata](https://www.eia.gov/opendata/register.php) "
+            "and set it as `EIA_API_KEY` (environment variable or in "
+            "`.streamlit/secrets.toml`)."
+        )
+    st.caption(
+        "Sources: EPA FuelEconomy.gov · NREL/OpenEI utility rates · "
+        "EIA gasoline prices"
+    )
 
 # =============================================================================
 # Header
@@ -123,7 +187,16 @@ if electricity_rate < 0.06:
 # Gas price for this location (state average, with national fallback)
 gas_price, gas_price_state = get_gas_price(zip_code, gas_prices_df, electricity_df)
 if gas_price_state:
-    st.caption(f"⛽ Gas price for your area: **${gas_price:.2f}/gal** ({gas_price_state} state average)")
+    if live_gas_df is not None:
+        source_rows = live_gas_df[live_gas_df["state"] == gas_price_state]
+        price_source = source_rows["price_source"].iloc[0] if not source_rows.empty else "state average"
+        week = source_rows["period"].iloc[0] if not source_rows.empty else ""
+        st.caption(
+            f"⛽ Gas price for your area: **${gas_price:.2f}/gal** "
+            f"({gas_price_state} — live EIA {price_source}, week of {week})"
+        )
+    else:
+        st.caption(f"⛽ Gas price for your area: **${gas_price:.2f}/gal** ({gas_price_state} state average, static)")
 else:
     st.caption(f"⛽ Gas price: **${gas_price:.2f}/gal** (national average — couldn't determine your state)")
 
@@ -165,7 +238,7 @@ st.divider()
 
 st.header("🚘 Select Vehicles to Compare")
 
-col_gas, col_ev = st.columns(2)
+col_gas, col_ev = st.columns(2, border=True)
 
 # --- Gas Vehicle ---
 with col_gas:
@@ -276,6 +349,8 @@ with col_ev:
             (ev_vehicles["model"] == ev_model)
         ]["kwh_per_100mi"].mean(), 1)
         st.metric("Efficiency", f"{ev_kwh:g} kWh/100mi")
+        if pd.notna(ev_kwh) and ev_kwh > 0:
+            st.caption(f"≈ {kwh_to_mpge(ev_kwh):.0f} MPGe (gas-equivalent efficiency)")
     else:
         ev_kwh = None
 
@@ -673,6 +748,7 @@ st.divider()
 
 st.caption(
     "**Data sources:** EPA FuelEconomy.gov, EIA gas prices, NREL electricity rates  \n"
+    f"**Gas price data:** {gas_data_note}  \n"
     "**Note:** Calculations are estimates. Actual costs vary based on driving habits, "
     "local utility rate structures, and fuel price fluctuations."
 )
