@@ -2,6 +2,7 @@
 # Handles loading and looking up vehicle, electricity, and gas price data
 
 import pandas as pd
+from datetime import datetime
 from pathlib import Path
 
 # =============================================================================
@@ -236,6 +237,27 @@ def create_sample_gas_data() -> pd.DataFrame:
 # =============================================================================
 # Lookup Functions
 # =============================================================================
+
+def get_data_freshness() -> dict[str, str]:
+    """
+    Describe where each dataset comes from and when it was last updated,
+    so the UI can surface data provenance instead of hiding it.
+    """
+    datasets = {
+        "Vehicles (EPA)": "data/vehicles.csv",
+        "Electricity rates (NREL)": "data/electricity_rates.csv",
+        "Gas prices": "data/gas_prices.csv",
+    }
+    info = {}
+    for name, path in datasets.items():
+        p = Path(path)
+        if p.exists():
+            updated = datetime.fromtimestamp(p.stat().st_mtime).date()
+            info[name] = f"downloaded {updated.isoformat()}"
+        else:
+            info[name] = "built-in sample data"
+    return info
+
 
 def validate_zip(zip_code: str) -> str | None:
     """

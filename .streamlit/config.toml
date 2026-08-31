@@ -1,0 +1,12 @@
+# DriveMath - Streamlit theme
+# Green accent to match the EV branding used in the charts (#22c55e)
+
+[theme]
+primaryColor = "#22c55e"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f4f6f8"
+textColor = "#1f2937"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false

@@ -277,16 +277,31 @@ def download_electricity_rates() -> pd.DataFrame | None:
 def download_gas_prices() -> pd.DataFrame:
     """
     Create gas prices by state.
-    
-    Note: EIA API requires registration for real-time data.
-    This creates a static file with approximate recent prices.
+
+    If an EIA_API_KEY is set (environment variable), fetches current
+    weekly retail prices from the EIA API. Otherwise writes a static
+    file with approximate prices.
     """
     print("Creating gas price data...")
-    
+
+    from live_prices import fetch_live_gas_prices, get_eia_api_key
+
+    api_key = get_eia_api_key()
+    if api_key:
+        print("  EIA_API_KEY found — fetching live weekly prices...")
+        live = fetch_live_gas_prices(api_key)
+        if live is not None:
+            live = live.copy()
+            live["last_updated"] = str(date.today())
+            live.to_csv("data/gas_prices.csv", index=False)
+            print(f"  Saved live prices for {len(live)} states to data/gas_prices.csv")
+            return live
+        print("  Live fetch failed — falling back to static values.")
+
     # These are approximate values - should be updated periodically
     # For live data, register for an EIA API key at:
     # https://www.eia.gov/opendata/register.php
-    
+
     gas_prices = pd.DataFrame({
         "state": [
             "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
