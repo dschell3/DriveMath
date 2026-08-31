@@ -48,6 +48,9 @@ def calculate_comparison(
     Returns:
         Dictionary containing all comparison metrics
     """
+    if annual_miles <= 0:
+        raise ValueError(f"annual_miles must be positive, got {annual_miles}")
+
     # Calculate annual costs
     gas_annual_cost = calculate_gas_annual_cost(annual_miles, gas_mpg, gas_price)
     ev_annual_cost = calculate_ev_annual_cost(
@@ -103,6 +106,8 @@ def calculate_gas_annual_cost(
     Returns:
         Annual fuel cost in dollars
     """
+    if mpg <= 0:
+        raise ValueError(f"mpg must be positive, got {mpg}")
     gallons_used = annual_miles / mpg
     return gallons_used * gas_price
 
@@ -125,6 +130,8 @@ def calculate_ev_annual_cost(
     Returns:
         Annual energy cost in dollars
     """
+    if kwh_per_100mi <= 0:
+        raise ValueError(f"kwh_per_100mi must be positive, got {kwh_per_100mi}")
     kwh_used = (annual_miles / 100) * kwh_per_100mi
     effective_rate = electricity_rate * tou_multiplier
     return kwh_used * effective_rate
@@ -181,6 +188,56 @@ def calculate_breakeven_years(
         return float('inf')
     
     return ev_premium / annual_savings
+
+
+# EPA: burning one gallon of gasoline emits 8.887 kg of CO2
+CO2_KG_PER_GALLON = 8.887
+
+# EPA eGRID US national average grid carbon intensity (~0.39 kg CO2/kWh).
+# Actual intensity varies widely by region and time of day.
+CO2_KG_PER_KWH_GRID = 0.39
+
+
+class EmissionsResult(TypedDict):
+    """Type definition for emissions comparison results."""
+    gas_annual_co2_kg: float
+    ev_annual_co2_kg: float
+    annual_co2_savings_kg: float
+    co2_reduction_pct: float
+
+
+def calculate_emissions_comparison(
+    gas_mpg: float,
+    ev_kwh_per_100: float,
+    annual_miles: int,
+    grid_co2_kg_per_kwh: float = CO2_KG_PER_KWH_GRID,
+) -> EmissionsResult:
+    """
+    Estimate annual tailpipe/grid CO2 emissions for both vehicles.
+
+    Covers gasoline combustion vs. grid electricity generation only
+    (not upstream fuel production or vehicle manufacturing).
+
+    Args:
+        gas_mpg: Miles per gallon for gas vehicle
+        ev_kwh_per_100: kWh per 100 miles for EV
+        annual_miles: Annual miles driven
+        grid_co2_kg_per_kwh: Grid carbon intensity (kg CO2 per kWh)
+
+    Returns:
+        Dictionary with annual CO2 (kg) for each vehicle and the savings
+    """
+    gas_annual_co2 = (annual_miles / gas_mpg) * CO2_KG_PER_GALLON
+    ev_annual_co2 = (annual_miles / 100) * ev_kwh_per_100 * grid_co2_kg_per_kwh
+    savings = gas_annual_co2 - ev_annual_co2
+    reduction_pct = (savings / gas_annual_co2 * 100) if gas_annual_co2 > 0 else 0.0
+
+    return {
+        "gas_annual_co2_kg": gas_annual_co2,
+        "ev_annual_co2_kg": ev_annual_co2,
+        "annual_co2_savings_kg": savings,
+        "co2_reduction_pct": reduction_pct,
+    }
 
 
 def mpg_to_miles_per_kwh(mpg: float) -> float:

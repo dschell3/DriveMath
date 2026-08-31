@@ -237,10 +237,24 @@ def create_sample_gas_data() -> pd.DataFrame:
 # Lookup Functions
 # =============================================================================
 
+def validate_zip(zip_code: str) -> str | None:
+    """
+    Sanitize and validate a user-entered zip code.
+
+    Returns the cleaned 5-digit zip string, or None if invalid.
+    """
+    if not zip_code:
+        return None
+    cleaned = zip_code.strip()
+    if len(cleaned) == 5 and cleaned.isdigit():
+        return cleaned
+    return None
+
+
 def get_utilities_for_zip(zip_code: str, electricity_df: pd.DataFrame) -> pd.DataFrame:
     """
     Get all utilities serving a zip code.
-    
+
     Returns:
         DataFrame with utility_name and residential_rate columns,
         sorted by rate (cheapest first).
@@ -248,76 +262,97 @@ def get_utilities_for_zip(zip_code: str, electricity_df: pd.DataFrame) -> pd.Dat
     utilities = electricity_df[electricity_df["zip"] == zip_code][
         ["utility_name", "residential_rate"]
     ].drop_duplicates().sort_values("residential_rate")
-    
+
     return utilities
 
 
-def get_gas_price(zip_code: str, gas_prices_df: pd.DataFrame) -> float:
+NATIONAL_AVG_GAS_PRICE = 3.20
+
+
+def get_state_for_zip(zip_code: str, electricity_df: pd.DataFrame | None = None) -> str | None:
+    """
+    Resolve a zip code to a state.
+
+    Prefers the state recorded in the electricity rates dataset (exact,
+    covers every zip in the data), then falls back to the 3-digit
+    prefix mapping.
+    """
+    if electricity_df is not None and "state" in electricity_df.columns:
+        matches = electricity_df.loc[electricity_df["zip"] == zip_code, "state"].dropna()
+        if not matches.empty:
+            return matches.iloc[0]
+    return zip_to_state(zip_code)
+
+
+def get_gas_price(
+    zip_code: str,
+    gas_prices_df: pd.DataFrame,
+    electricity_df: pd.DataFrame | None = None,
+) -> tuple[float, str | None]:
     """
     Get gas price for a zip code (via state lookup).
     Falls back to national average if state not found.
+
+    Returns:
+        (price_per_gallon, state) — state is None when the national
+        average fallback was used.
     """
-    state = zip_to_state(zip_code)
-    
+    state = get_state_for_zip(zip_code, electricity_df)
+
     if state:
         matches = gas_prices_df[gas_prices_df["state"] == state]
         if not matches.empty:
-            return matches["price_per_gallon"].iloc[0]
-    
-    # Fallback to national average
-    return 3.20
+            return matches["price_per_gallon"].iloc[0], state
+
+    return NATIONAL_AVG_GAS_PRICE, None
+
+
+# USPS 3-digit zip prefix ranges → state. Ranges are inclusive.
+# A handful of prefixes cross state lines in reality; this resolves each
+# prefix to the state that holds the overwhelming majority of it.
+_ZIP_PREFIX_RANGES: list[tuple[int, int, str]] = [
+    (5, 5, "NY"), (6, 9, "PR"),
+    (10, 27, "MA"), (28, 29, "RI"), (30, 38, "NH"), (39, 49, "ME"),
+    (50, 54, "VT"), (55, 55, "MA"), (56, 59, "VT"),
+    (60, 69, "CT"), (70, 89, "NJ"),
+    (100, 149, "NY"), (150, 196, "PA"), (197, 199, "DE"),
+    (200, 200, "DC"), (201, 201, "VA"), (202, 205, "DC"),
+    (206, 219, "MD"), (220, 246, "VA"), (247, 268, "WV"),
+    (270, 289, "NC"), (290, 299, "SC"),
+    (300, 319, "GA"), (320, 339, "FL"), (341, 342, "FL"),
+    (344, 344, "FL"), (346, 347, "FL"), (349, 349, "FL"),
+    (350, 369, "AL"), (370, 385, "TN"), (386, 397, "MS"),
+    (398, 399, "GA"),
+    (400, 427, "KY"), (430, 459, "OH"), (460, 479, "IN"),
+    (480, 499, "MI"),
+    (500, 528, "IA"), (530, 549, "WI"), (550, 567, "MN"),
+    (570, 577, "SD"), (580, 588, "ND"), (590, 599, "MT"),
+    (600, 629, "IL"), (630, 658, "MO"), (660, 679, "KS"),
+    (680, 693, "NE"),
+    (700, 714, "LA"), (716, 729, "AR"), (730, 732, "OK"),
+    (733, 733, "TX"), (734, 749, "OK"), (750, 799, "TX"),
+    (800, 816, "CO"), (820, 831, "WY"), (832, 838, "ID"),
+    (840, 847, "UT"), (850, 865, "AZ"), (870, 884, "NM"),
+    (885, 885, "TX"), (889, 898, "NV"),
+    (900, 961, "CA"), (967, 968, "HI"), (970, 979, "OR"),
+    (980, 994, "WA"), (995, 999, "AK"),
+]
 
 
 def zip_to_state(zip_code: str) -> str | None:
     """
-    Simplified zip code to state mapping.
-    In production, use a proper zip code database.
+    Map a zip code to its state using USPS 3-digit prefix ranges.
+    Covers all 50 states, DC, and Puerto Rico.
     """
-    if not zip_code or len(zip_code) < 3:
+    if not zip_code or len(zip_code) < 3 or not zip_code[:3].isdigit():
         return None
-    
-    first_three = zip_code[:3]
-    
-    # California (900-961)
-    if "900" <= first_three <= "961":
-        return "CA"
-    
-    # New York (100-149)
-    if "100" <= first_three <= "149":
-        return "NY"
-    
-    # Texas (750-799)
-    if "750" <= first_three <= "799":
-        return "TX"
-    
-    # Illinois (600-629)
-    if "600" <= first_three <= "629":
-        return "IL"
-    
-    # Florida (320-349)
-    if "320" <= first_three <= "349":
-        return "FL"
-    
-    # Washington (980-994)
-    if "980" <= first_three <= "994":
-        return "WA"
-    
-    # Georgia (300-319)
-    if "300" <= first_three <= "319":
-        return "GA"
-    
-    # Pennsylvania (150-196)
-    if "150" <= first_three <= "196":
-        return "PA"
-    
-    # Ohio (430-459)
-    if "430" <= first_three <= "459":
-        return "OH"
-    
-    # Michigan (480-499)
-    if "480" <= first_three <= "499":
-        return "MI"
-    
+
+    prefix = int(zip_code[:3])
+
+    for start, end, state in _ZIP_PREFIX_RANGES:
+        if start <= prefix <= end:
+            return state
+
     return None
 
 
